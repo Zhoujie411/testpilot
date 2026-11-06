@@ -6,6 +6,7 @@
 
 - FastAPI 后端：项目管理、环境管理、接口测试用例、执行记录
 - Vue 3 + Vite 前端：项目概览和测试用例列表
+- B2C 测试工具箱：时间戳转换、图片压缩、指定尺寸裁切
 - SQLite 本地开发数据库；后续可切换 PostgreSQL
 - Docker Compose 预留 PostgreSQL 与 Redis 服务
 
@@ -34,6 +35,18 @@ npm run dev
 ```
 
 前端地址：<http://localhost:5173>
+
+部署到服务器后，前端会默认请求当前服务器主机的 `8000` 端口。也可以在构建时设置：
+
+```bash
+VITE_API_BASE_URL=https://api.example.com npm run build
+```
+
+后端 MVP 默认允许跨域访问。正式环境建议限制为你的前端域名：
+
+```bash
+CORS_ORIGINS=https://test.example.com uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
 
 ## MVP 路线
 

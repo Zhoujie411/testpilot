@@ -1,20 +1,27 @@
 <script setup>
 import { onMounted, ref } from 'vue'
+import Toolbox from './components/Toolbox.vue'
 
+const currentPage = ref('dashboard')
 const projects = ref([])
 const cases = ref([])
 const loading = ref(true)
-const api = 'http://localhost:8000'
+const apiOnline = ref(false)
+const api = import.meta.env.VITE_API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8000`
 
 async function loadData() {
   loading.value = true
   try {
     const projectResponse = await fetch(`${api}/api/projects`)
+    if (!projectResponse.ok) throw new Error('API 请求失败')
+    apiOnline.value = true
     projects.value = await projectResponse.json()
     if (projects.value[0]) {
       const caseResponse = await fetch(`${api}/api/projects/${projects.value[0].id}/test-cases`)
       cases.value = await caseResponse.json()
     }
+  } catch {
+    apiOnline.value = false
   } finally {
     loading.value = false
   }
@@ -30,16 +37,20 @@ onMounted(loadData)
         <p class="eyebrow">QUALITY ENGINEERING</p>
         <h1>TestPilot</h1>
       </div>
-      <button class="primary">+ 新建测试用例</button>
+      <nav class="main-nav">
+        <button :class="{ active: currentPage === 'dashboard' }" @click="currentPage = 'dashboard'">工作台</button>
+        <button :class="{ active: currentPage === 'tools' }" @click="currentPage = 'tools'">B2C 工具箱</button>
+      </nav>
     </header>
 
+    <template v-if="currentPage === 'dashboard'">
     <section class="hero">
       <div>
         <p class="eyebrow">测试平台 MVP</p>
         <h2>让每次发布，都有可追溯的质量证据。</h2>
         <p class="muted">统一管理接口用例、测试环境与执行结果，为 CI/CD 提供质量门禁。</p>
       </div>
-      <div class="health"><span></span> API 服务正常</div>
+      <div class="health" :class="{ offline: !apiOnline }"><span></span> {{ apiOnline ? 'API 服务正常' : 'API 暂未连接' }}</div>
     </section>
 
     <section class="stats">
@@ -61,5 +72,7 @@ onMounted(loadData)
         </div>
       </div>
     </section>
+    </template>
+    <Toolbox v-else />
   </main>
 </template>
