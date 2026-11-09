@@ -238,6 +238,12 @@ def add_session_link(session_id: int, payload: LinkCreate, user: dict = Depends(
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"抓取链接失败：{error}") from error
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="链接抓取成功但正文为空：页面内容由 JavaScript 动态渲染（如墨刀、Axure 等原型工具），请导出需求文档后上传附件",
+        )
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     original_name = final_url if len(final_url) <= 200 else f"{final_url[:197]}..."
     stored_path = UPLOAD_DIR / f"{uuid4().hex}.txt"
     stored_path.write_text(text, encoding="utf-8")

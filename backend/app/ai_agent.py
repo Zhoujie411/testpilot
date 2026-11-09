@@ -81,6 +81,11 @@ def run_test_case_agent(
             return f"抓取链接失败：{error}"
         if f"附件：{final_url}" in attachment_context or f"附件：{url}" in attachment_context:
             return f"链接 {final_url} 的内容已在会话附件中，可直接用 search_attachments 检索关键词。"
+        if not text.strip():
+            return (
+                f"链接 {final_url} 抓取成功但正文为空，页面可能由 JavaScript 动态渲染"
+                "（如墨刀、Axure 等原型工具）。请告知用户导出需求文档（PDF/Word/图片说明）后上传附件。"
+            )
         return f"===== 链接：{final_url}（{size} 字节）=====\n{text[:8000]}"
 
     model = build_model(config, api_key)
