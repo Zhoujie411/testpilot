@@ -1,7 +1,8 @@
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.auth import get_current_user
 from app.database import get_connection
 from app.models import (
     Environment,
@@ -13,7 +14,11 @@ from app.models import (
     TestRun,
 )
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(
+    prefix="/api/projects",
+    tags=["projects"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("", response_model=list[Project])

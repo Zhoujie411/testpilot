@@ -7,6 +7,9 @@
 - FastAPI 后端：项目管理、环境管理、接口测试用例、执行记录
 - Vue 3 + Vite 前端：项目概览和测试用例列表
 - B2C 测试工具箱：时间戳转换、图片压缩、指定尺寸裁切
+- AI 测试用例 Agent：LangChain + LangGraph ReAct、附件理解、会话记忆
+- 自定义大模型：OpenAI/Codex、跃迁维度及其他 OpenAI-compatible 服务
+- 测试用例导出：Excel 与 XMind
 - SQLite 本地开发数据库；后续可切换 PostgreSQL
 - Docker Compose 预留 PostgreSQL 与 Redis 服务
 
@@ -47,6 +50,45 @@ VITE_API_BASE_URL=https://api.example.com npm run build
 ```bash
 CORS_ORIGINS=https://test.example.com uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+## AI 测试 Agent
+
+进入顶部“AI 测试 Agent”，先添加模型配置，再创建会话。支持的附件格式：
+
+- PDF、DOCX、XLSX、CSV
+- TXT、Markdown、JSON、YAML、XML、HTML、日志
+
+单个附件最大 10MB。附件保存在 `backend/uploads/`，解析后的文本、会话消息和记忆保存在 SQLite。
+
+模型配置支持两种调用模式：
+
+- `Responses API`：适合 OpenAI 官方支持该接口的模型
+- `Chat Completions`：适合多数 OpenAI-compatible 第三方服务
+
+模型 ID 不做硬编码，请填写你的服务商账号实际可用的模型 ID。API Key 使用 `TESTPILOT_SECRET_KEY` 加密后保存；正式部署前必须设置稳定的随机密钥：
+
+```bash
+cd backend
+cp .env.example .env
+# 编辑 .env 后启动
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --env-file .env
+```
+
+若更换 `TESTPILOT_SECRET_KEY`，此前保存的 API Key 将无法解密，需要重新添加模型配置。
+
+## 登录与权限
+
+- `admin`：管理用户与模型配置，可以审计所有 Agent 会话
+- `user`：使用项目、工具箱和自己的 Agent 会话
+
+首次启动前，需要在 `backend/.env` 设置初始化管理员：
+
+```env
+TESTPILOT_ADMIN_USERNAME=admin
+TESTPILOT_ADMIN_PASSWORD=至少12位的强密码
+```
+
+JWT 默认有效期为 8 小时，登录状态存储在浏览器当前标签页的 `sessionStorage`。完整的 Nginx、systemd 与 Certbot HTTPS 部署步骤见 `deploy/README.md`。
 
 ## MVP 路线
 
