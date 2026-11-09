@@ -18,6 +18,9 @@ const prompt = ref('')
 const busy = ref(false)
 const uploadBusy = ref(false)
 const error = ref('')
+const showLinkInput = ref(false)
+const linkUrl = ref('')
+const linkBusy = ref(false)
 const showModelDialog = ref(false)
 const modelSaving = ref(false)
 const connectionMessage = ref('')
@@ -115,6 +118,25 @@ async function uploadFiles(event) {
     error.value = requestError.message
   } finally {
     uploadBusy.value = false
+  }
+}
+
+async function addLink() {
+  const url = linkUrl.value.trim()
+  if (!url || linkBusy.value || !currentSession.value) return
+  linkBusy.value = true
+  error.value = ''
+  try {
+    const attachment = await request(`/api/ai/sessions/${currentSession.value.id}/links`, {
+      method: 'POST', body: JSON.stringify({ url }),
+    })
+    attachments.value.push(attachment)
+    linkUrl.value = ''
+    showLinkInput.value = false
+  } catch (requestError) {
+    error.value = requestError.message
+  } finally {
+    linkBusy.value = false
   }
 }
 
@@ -263,12 +285,17 @@ onMounted(loadInitial)
       <footer class="agent-composer">
         <div v-if="attachments.length" class="attachment-list"><span v-for="file in attachments" :key="file.id">📎 {{ file.original_name }} <small>{{ formatSize(file.size) }}</small></span></div>
         <p v-if="error" class="agent-error">{{ error }}</p>
+        <div v-if="showLinkInput" class="link-row">
+          <input v-model="linkUrl" type="url" placeholder="粘贴需求文档链接（http/https），抓取后作为附件参与分析" :disabled="linkBusy" @keydown.enter.prevent="addLink">
+          <button class="secondary" :disabled="linkBusy || !linkUrl.trim()" @click="addLink">{{ linkBusy ? '抓取中…' : '读取链接' }}</button>
+        </div>
         <div class="composer-box">
           <label class="attach-button" :class="{ disabled: !currentSession || uploadBusy }"><input type="file" multiple accept=".txt,.md,.json,.yaml,.yml,.xml,.html,.log,.csv,.pdf,.docx,.xlsx" @change="uploadFiles">{{ uploadBusy ? '…' : '＋' }}</label>
+          <button type="button" class="attach-button" :class="{ active: showLinkInput }" title="读取需求链接" @click="showLinkInput = !showLinkInput">🔗</button>
           <textarea v-model="prompt" :disabled="busy" rows="2" placeholder="输入测试需求，Shift + Enter 换行…" @keydown="handlePromptKeydown"></textarea>
           <button class="send-button" :disabled="busy || !prompt.trim()" @click="sendMessage">发送</button>
         </div>
-        <small class="composer-hint">附件最大 10MB，支持 PDF、Word、Excel、CSV、Markdown 等格式</small>
+        <small class="composer-hint">附件最大 10MB（PDF、Word、Excel、CSV、Markdown 等）· 🔗 支持抓取公网需求链接 · 对话中直接粘贴链接也可以</small>
       </footer>
     </section>
   </section>

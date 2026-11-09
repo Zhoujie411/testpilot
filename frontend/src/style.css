@@ -126,9 +126,11 @@ h3 { font-size: 18px; }
 .agent-composer { padding: 12px 20px 16px; border-top: 1px solid #e8ecf3; background: #fff; }
 .attachment-list { display: flex; gap: 6px; margin-bottom: 8px; overflow-x: auto; }.attachment-list > span { flex: 0 0 auto; padding: 5px 8px; border-radius: 6px; color: #52637f; background: #edf2fb; font-size: 10px; }.attachment-list small { color: #8995a8; }
 .agent-error { margin-bottom: 8px; color: #d34d4d; font-size: 11px; }
-.composer-box { display: grid; grid-template-columns: auto 1fr auto; align-items: end; gap: 9px; padding: 9px; border: 1px solid #d8dfeb; border-radius: 12px; background: #fbfcfe; }
+.composer-box { display: grid; grid-template-columns: auto auto 1fr auto; align-items: end; gap: 9px; padding: 9px; border: 1px solid #d8dfeb; border-radius: 12px; background: #fbfcfe; }
 .composer-box:focus-within { border-color: #7895e8; box-shadow: 0 0 0 3px #eef2ff; }
-.attach-button { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 8px; color: #3157b7; background: #e8eeff; font-size: 20px; cursor: pointer; }.attach-button input { display: none; }.attach-button.disabled { opacity: .4; pointer-events: none; }
+.attach-button { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 8px; color: #3157b7; background: #e8eeff; font-size: 20px; cursor: pointer; }.attach-button input { display: none; }.attach-button.disabled { opacity: .4; pointer-events: none; }.attach-button.active { background: #3157b7; color: #fff; }
+.link-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-bottom: 8px; }
+.link-row input { padding: 9px 12px; border: 1px solid #d8dfeb; border-radius: 9px; font: inherit; font-size: 12px; color: #273349; outline: none; }.link-row input:focus { border-color: #7895e8; box-shadow: 0 0 0 3px #eef2ff; }
 .composer-box textarea { width: 100%; max-height: 110px; padding: 6px 2px; resize: none; border: 0; outline: none; color: #273349; background: transparent; font: inherit; line-height: 1.5; }
 .send-button { height: 34px; padding: 0 14px; border: 0; border-radius: 8px; color: #fff; background: #275df5; font-weight: 700; cursor: pointer; }.send-button:disabled { opacity: .45; cursor: not-allowed; }
 .composer-hint { display: block; margin-top: 7px; color: #9aa4b4; font-size: 9px; text-align: center; }

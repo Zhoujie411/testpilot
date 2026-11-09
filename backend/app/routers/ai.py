@@ -12,6 +12,7 @@ from app.ai_security import decrypt_api_key, encrypt_api_key
 from app.attachment_parser import SUPPORTED_SUFFIXES, compact_attachment_context, extract_text
 from app.auth import get_current_user, require_admin
 from app.database import get_connection
+from app.url_fetch import fetch_url_text
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai-agent"])
@@ -39,6 +40,10 @@ class SessionUpdate(BaseModel):
 
 class ChatRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
+
+
+class LinkCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
 
 
 def _row(row) -> dict:
@@ -221,6 +226,32 @@ async def upload_attachments(
             ).fetchone()
         saved.append(_row(row))
     return saved
+
+
+@router.post("/sessions/{session_id}/links", status_code=201)
+def add_session_link(session_id: int, payload: LinkCreate, user: dict = Depends(get_current_user)):
+    """抓取需求链接正文，存为会话附件，与上传文件走同一套上下文与检索逻辑。"""
+    _get_session(session_id, user)
+    try:
+        text, final_url, size = fetch_url_text(payload.url)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        raise HTTPException(status_code=502, detail=f"抓取链接失败：{error}") from error
+    original_name = final_url if len(final_url) <= 200 else f"{final_url[:197]}..."
+    stored_path = UPLOAD_DIR / f"{uuid4().hex}.txt"
+    stored_path.write_text(text, encoding="utf-8")
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """INSERT INTO ai_attachments(session_id, original_name, stored_path, content_text, size)
+            VALUES (?, ?, ?, ?, ?)""",
+            (session_id, original_name, str(stored_path), text, size),
+        )
+        row = connection.execute(
+            "SELECT id, original_name, size, created_at FROM ai_attachments WHERE id = ?",
+            (cursor.lastrowid,),
+        ).fetchone()
+    return _row(row)
 
 
 @router.post("/sessions/{session_id}/chat")

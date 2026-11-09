@@ -7,10 +7,13 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
+from app.url_fetch import fetch_url_text
+
 
 SYSTEM_PROMPT = """你是资深软件测试分析师，负责根据需求文档生成高质量测试用例。
 你必须主动分析功能流程、业务规则、异常、边界、安全、兼容性和数据一致性。
-你可以使用工具检索附件和记录需要跨轮次保留的项目事实，这就是 ReAct 工作方式的一部分。
+你可以使用工具检索附件、抓取用户给出的需求链接、记录需要跨轮次保留的项目事实，这就是 ReAct 工作方式的一部分。
+当用户消息中包含 http/https 链接时，优先调用 fetch_requirement_url 获取真实内容，绝不要凭空猜测链接内容。
 
 最终回答必须先给出一句简短中文说明，然后输出一个 ```json 代码块，JSON 格式严格如下：
 {
@@ -69,8 +72,21 @@ def run_test_case_agent(
         save_memory(fact)
         return "已写入会话长期记忆。"
 
+    @tool
+    def fetch_requirement_url(url: str) -> str:
+        """Fetch an http/https requirement document URL and return its extracted plain text. Use this when the user message contains a link."""
+        try:
+            text, final_url, size = fetch_url_text(url)
+        except ValueError as error:
+            return f"抓取链接失败：{error}"
+        if f"附件：{final_url}" in attachment_context or f"附件：{url}" in attachment_context:
+            return f"链接 {final_url} 的内容已在会话附件中，可直接用 search_attachments 检索关键词。"
+        return f"===== 链接：{final_url}（{size} 字节）=====\n{text[:8000]}"
+
     model = build_model(config, api_key)
-    agent = create_react_agent(model, [search_attachments, remember_project_fact], prompt=SYSTEM_PROMPT)
+    agent = create_react_agent(
+        model, [search_attachments, remember_project_fact, fetch_requirement_url], prompt=SYSTEM_PROMPT
+    )
     messages = []
     if memory_summary:
         messages.append(SystemMessage(content=f"会话长期记忆：\n{memory_summary}"))
