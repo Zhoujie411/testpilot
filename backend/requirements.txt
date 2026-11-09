@@ -12,3 +12,5 @@ python-docx>=1.1.2,<2.0
 cryptography>=44.0.0,<47.0
 PyJWT>=2.10.0,<3.0
 pwdlib[argon2]>=0.3.0,<1.0
+# 可选：读取 JS 动态渲染页面（墨刀/Axure 分享页）。装完还需执行 playwright install chromium
+playwright>=1.49.0,<2.0

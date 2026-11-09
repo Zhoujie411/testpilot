@@ -60,7 +60,17 @@ CORS_ORIGINS=https://test.example.com uvicorn app.main:app --host 127.0.0.1 --po
 
 单个附件最大 10MB。附件保存在 `backend/uploads/`，解析后的文本、会话消息和记忆保存在 SQLite。
 
-也支持直接读取需求链接：在输入区点击 🔗 把公网链接抓取为会话附件，或在对话中直接粘贴 http/https 链接，Agent 会调用 `fetch_requirement_url` 工具抓取真实正文。仅支持无需登录、且正文在 HTML 中静态输出的公网页面；需登录的系统（Confluence、飞书等）以及 JavaScript 动态渲染的原型页（墨刀、Axure 在线分享等）无法提取正文，会返回明确提示，请导出文件后上传。链接抓取带 SSRF 防护（拒绝内网/回环地址、限制重定向 5 次、单页 5MB 上限）。
+也支持直接读取需求链接：在输入区点击 🔗 把公网链接抓取为会话附件，或在对话中直接粘贴 http/https 链接，Agent 会调用 `fetch_requirement_url` 工具抓取真实正文。静态抓取拿不到正文时（墨刀、Axure 等 JavaScript 动态渲染的分享页）自动回退到无头浏览器渲染。需登录的系统（Confluence、飞书等）仍无法读取，请导出文件后上传。链接抓取带 SSRF 防护（拒绝内网/回环地址、浏览器渲染时每个子请求都校验目标主机、限制重定向 5 次、单页 5MB 上限）。
+
+启用浏览器渲染需在服务器上安装 Playwright 与 Chromium（不装则自动降级为纯静态抓取）：
+
+```bash
+cd backend && source .venv/bin/activate
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright playwright install chromium
+sudo .venv/bin/playwright install-deps chromium   # 安装 Chromium 系统依赖
+```
+
+注意：渲染任务单次额外占用约 300～500MB 内存，2GB 以下内存的服务器请谨慎启用。
 
 模型配置支持两种调用模式：
 

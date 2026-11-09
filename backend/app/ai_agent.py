@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from app.url_fetch import fetch_url_text
+from app.url_fetch import read_url_text
 
 
 SYSTEM_PROMPT = """你是资深软件测试分析师，负责根据需求文档生成高质量测试用例。
@@ -76,15 +76,15 @@ def run_test_case_agent(
     def fetch_requirement_url(url: str) -> str:
         """Fetch an http/https requirement document URL and return its extracted plain text. Use this when the user message contains a link."""
         try:
-            text, final_url, size = fetch_url_text(url)
+            text, final_url, size = read_url_text(url)
         except ValueError as error:
             return f"抓取链接失败：{error}"
         if f"附件：{final_url}" in attachment_context or f"附件：{url}" in attachment_context:
             return f"链接 {final_url} 的内容已在会话附件中，可直接用 search_attachments 检索关键词。"
         if not text.strip():
             return (
-                f"链接 {final_url} 抓取成功但正文为空，页面可能由 JavaScript 动态渲染"
-                "（如墨刀、Axure 等原型工具）。请告知用户导出需求文档（PDF/Word/图片说明）后上传附件。"
+                f"链接 {final_url} 已尝试浏览器渲染但正文仍为空，页面可能是纯图片/画布原型或需要登录。"
+                "请告知用户导出需求文档（PDF/Word）后上传附件。"
             )
         return f"===== 链接：{final_url}（{size} 字节）=====\n{text[:8000]}"
 

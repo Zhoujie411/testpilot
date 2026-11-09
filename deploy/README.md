@@ -23,6 +23,15 @@ ACCESS_TOKEN_EXPIRE_HOURS=8
 CORS_ORIGINS=https://YOUR_DOMAIN
 ```
 
+可选：启用需求链接的无头浏览器渲染（墨刀、Axure 等 JS 动态渲染页面），不装则自动降级为纯静态抓取：
+
+```bash
+cd /home/ubuntu/testpilot/backend
+source .venv/bin/activate
+PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright playwright install chromium
+sudo .venv/bin/playwright install-deps chromium
+```
+
 ## 2. systemd
 
 ```bash

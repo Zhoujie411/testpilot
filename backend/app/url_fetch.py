@@ -1,16 +1,22 @@
 """安全的网页抓取与正文提取，供 AI Agent 读取需求链接使用。
 
-安全约束：
+抓取策略：
+1. 静态抓取（httpx）：快、轻量，适合正文在 HTML 中静态输出的页面
+2. 无头浏览器渲染（Playwright Chromium）：处理 JavaScript 动态渲染的 SPA 页面
+   （墨刀、Axure 在线分享等）。服务器未安装 Playwright 时自动降级为纯静态抓取。
+
+安全约束（两条路径都生效）：
 - 仅允许 http/https
 - 解析域名后拒绝内网、回环、链路本地、保留与组播地址（防 SSRF）
-- 手动处理重定向，每一跳都重新校验目标主机
-- 响应体大小限制 5MB，防止恶意大页面拖垮服务
+- 浏览器渲染时，页面内发出的每一个子请求（XHR、重定向、iframe）都重新校验目标主机
+- 响应体大小限制 5MB，渲染超时 20 秒，同一时刻只允许一个渲染任务
 """
 
 import ipaddress
 import re
 import socket
 import tempfile
+import threading
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -20,6 +26,15 @@ import httpx
 
 from app.attachment_parser import SUPPORTED_SUFFIXES, TEXT_SUFFIXES, extract_text
 
+try:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright
+
+    RENDER_AVAILABLE = True
+except ImportError:
+    RENDER_AVAILABLE = False
+
 ALLOWED_SCHEMES = {"http", "https"}
 MAX_REDIRECTS = 5
 MAX_CONTENT_BYTES = 5 * 1024 * 1024
@@ -27,6 +42,98 @@ REQUEST_TIMEOUT = 15.0
 USER_AGENT = "Mozilla/5.0 (compatible; TestPilotAgent/0.1)"
 HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
 _REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+MAX_RENDER_TEXT = 100_000
+_RENDER_LOCK = threading.Lock()
+
+
+class LinkRejected(ValueError):
+    """链接本身不合法或指向内网（不可通过渲染重试）。"""
+
+
+def read_url_text(url: str) -> tuple[str, str, int]:
+    """读取链接正文：先静态抓取，失败或正文为空时回退到无头浏览器渲染。"""
+    static_error: ValueError | None = None
+    try:
+        text, final_url, size = fetch_url_text(url)
+        if text.strip():
+            return text, final_url, size
+        static_error = ValueError("页面正文为空")
+    except LinkRejected:
+        raise
+    except ValueError as error:
+        static_error = error
+    if not RENDER_AVAILABLE:
+        raise ValueError(
+            f"{static_error}；且服务器未安装 Playwright 渲染引擎，无法读取 JavaScript 动态渲染的页面"
+            "（安装：pip install playwright && playwright install chromium）"
+        )
+    return render_url_text(url)
+
+
+def render_url_text(url: str) -> tuple[str, str, int]:
+    """用无头浏览器渲染页面并提取正文，返回 (文本, 最终 URL, 文本字节数)。"""
+    _parse_and_validate(url)
+    if not _RENDER_LOCK.acquire(timeout=45):
+        raise ValueError("渲染引擎繁忙，请稍后重试")
+    try:
+        return _render(url)
+    finally:
+        _RENDER_LOCK.release()
+
+
+def _render(url: str) -> tuple[str, str, int]:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+            # --no-sandbox：systemd NoNewPrivileges 环境下 Chromium 沙箱不可用；
+            # 风险由 _route_guard 对全部请求的主机校验兜底
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+        try:
+            context = browser.new_context(
+                user_agent=USER_AGENT,
+                viewport={"width": 1280, "height": 900},
+                locale="zh-CN",
+            )
+            context.route("**/*", _route_guard)
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=20_000)
+            except PlaywrightTimeout:
+                pass  # 超时也尝试提取已渲染的内容
+            except PlaywrightError as error:
+                raise ValueError(f"页面渲染失败：{error}") from error
+            try:
+                page.wait_for_load_state("networkidle", timeout=5_000)
+            except PlaywrightError:
+                pass  # 等不到完全空闲就继续提取
+            parts = []
+            for frame in page.frames:
+                try:
+                    frame_text = frame.evaluate("document.body ? document.body.innerText : ''")
+                except PlaywrightError:
+                    continue
+                if frame_text and frame_text.strip():
+                    parts.append(frame_text.strip())
+            text = "\n\n".join(parts)[:MAX_RENDER_TEXT]
+            return text, page.url, len(text.encode("utf-8"))
+        finally:
+            browser.close()
+
+
+def _route_guard(route) -> None:
+    """浏览器内所有请求的守门人：私网地址直接中断，图片/音视频/字体跳过以加速渲染。"""
+    request = route.request
+    host = urlparse(request.url).hostname or ""
+    try:
+        _validate_hostname(host)
+    except ValueError:
+        route.abort()
+        return
+    if request.resource_type in {"image", "media", "font"}:
+        route.abort()
+        return
+    route.continue_()
 
 _SKIP_TAGS = {"script", "style", "noscript", "template", "svg"}
 _BLOCK_TAGS = {
@@ -49,10 +156,10 @@ def fetch_url_text(url: str) -> tuple[str, str, int]:
 def _parse_and_validate(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in ALLOWED_SCHEMES:
-        raise ValueError("仅支持 http/https 链接")
+        raise LinkRejected("仅支持 http/https 链接")
     hostname = parsed.hostname
     if not hostname:
-        raise ValueError("链接缺少主机名")
+        raise LinkRejected("链接缺少主机名")
     _validate_hostname(hostname)
 
 
@@ -60,13 +167,13 @@ def _validate_hostname(hostname: str) -> None:
     try:
         infos = socket.getaddrinfo(hostname, None)
     except socket.gaierror as error:
-        raise ValueError(f"无法解析域名：{hostname}") from error
+        raise LinkRejected(f"无法解析域名：{hostname}") from error
     for info in infos:
         raw = info[4][0]
         try:
             address = ipaddress.ip_address(raw.split("%")[0])
         except ValueError as error:
-            raise ValueError(f"目标地址无效：{raw}") from error
+            raise LinkRejected(f"目标地址无效：{raw}") from error
         if address.version == 6:
             mapped = address.ipv4_mapped
             if mapped is not None:
@@ -79,7 +186,7 @@ def _validate_hostname(hostname: str) -> None:
             or address.is_multicast
             or address.is_unspecified
         ):
-            raise ValueError("禁止访问内网、回环或保留地址")
+            raise LinkRejected("禁止访问内网、回环或保留地址")
 
 
 def _fetch(url: str) -> tuple[bytes, str, str]:

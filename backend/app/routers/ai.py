@@ -12,7 +12,7 @@ from app.ai_security import decrypt_api_key, encrypt_api_key
 from app.attachment_parser import SUPPORTED_SUFFIXES, compact_attachment_context, extract_text
 from app.auth import get_current_user, require_admin
 from app.database import get_connection
-from app.url_fetch import fetch_url_text
+from app.url_fetch import read_url_text
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai-agent"])
@@ -233,7 +233,7 @@ def add_session_link(session_id: int, payload: LinkCreate, user: dict = Depends(
     """抓取需求链接正文，存为会话附件，与上传文件走同一套上下文与检索逻辑。"""
     _get_session(session_id, user)
     try:
-        text, final_url, size = fetch_url_text(payload.url)
+        text, final_url, size = read_url_text(payload.url)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except Exception as error:
@@ -241,7 +241,7 @@ def add_session_link(session_id: int, payload: LinkCreate, user: dict = Depends(
     if not text.strip():
         raise HTTPException(
             status_code=422,
-            detail="链接抓取成功但正文为空：页面内容由 JavaScript 动态渲染（如墨刀、Axure 等原型工具），请导出需求文档后上传附件",
+            detail="已尝试浏览器渲染但仍未提取到正文：页面可能是纯图片/画布原型或需要登录，请导出需求文档后上传附件",
         )
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     original_name = final_url if len(final_url) <= 200 else f"{final_url[:197]}..."
