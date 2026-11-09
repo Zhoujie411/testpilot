@@ -29,6 +29,15 @@ class ModelConfigCreate(BaseModel):
     api_style: str = "chat_completions"
 
 
+class ModelConfigUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    provider: str | None = None
+    base_url: str | None = None
+    model_name: str | None = Field(default=None, min_length=1, max_length=120)
+    api_key: str | None = None
+    api_style: str | None = None
+
+
 class SessionCreate(BaseModel):
     title: str = "新会话"
     model_config_id: int | None = None
@@ -48,6 +57,20 @@ class LinkCreate(BaseModel):
 
 def _row(row) -> dict:
     return dict(row) if row else {}
+
+
+def _friendly_model_error(error: Exception) -> str:
+    """模型接口返回 HTML 页面时附上配置诊断提示。"""
+    message = str(error)
+    if "<!doctype" in message.lower() or "<html" in message.lower():
+        return (
+            f"{message[:300]}\n"
+            "诊断：模型接口返回了 HTML 网页而不是 JSON。常见原因："
+            "1) Base URL 填成了服务商官网首页，应指向 API 根路径（一般以 /v1 结尾）；"
+            "2) API 模式选错，第三方 OpenAI-compatible 服务应选 Chat Completions；"
+            "3) 请求体过大被服务商网关拦截。请在模型配置中修正后点“测试连接”验证。"
+        )
+    return message
 
 
 def _get_session(session_id: int, user: dict) -> dict:
@@ -96,6 +119,40 @@ def create_model(payload: ModelConfigCreate, _: dict = Depends(require_admin)):
     return _public_model(row)
 
 
+@router.patch("/models/{model_id}")
+def update_model(model_id: int, payload: ModelConfigUpdate, _: dict = Depends(require_admin)):
+    if payload.api_style is not None and payload.api_style not in {"chat_completions", "responses"}:
+        raise HTTPException(status_code=400, detail="API 模式无效")
+    fields = payload.model_dump(exclude_none=True)
+    if not fields:
+        raise HTTPException(status_code=400, detail="没有需要更新的内容")
+    if "api_key" in fields:
+        fields["api_key_ciphertext"] = encrypt_api_key(fields.pop("api_key"))
+    if fields.get("base_url"):
+        fields["base_url"] = fields["base_url"].rstrip("/")
+    assignments = ", ".join(f"{key} = ?" for key in fields)
+    with get_connection() as connection:
+        row = connection.execute("SELECT id FROM model_configs WHERE id = ?", (model_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="模型配置不存在")
+        connection.execute(
+            f"UPDATE model_configs SET {assignments} WHERE id = ?",
+            (*fields.values(), model_id),
+        )
+        row = connection.execute("SELECT * FROM model_configs WHERE id = ?", (model_id,)).fetchone()
+    return _public_model(row)
+
+
+@router.delete("/models/{model_id}", status_code=204)
+def delete_model(model_id: int, _: dict = Depends(require_admin)):
+    with get_connection() as connection:
+        row = connection.execute("SELECT id FROM model_configs WHERE id = ?", (model_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="模型配置不存在")
+        connection.execute("DELETE FROM model_configs WHERE id = ?", (model_id,))
+        connection.execute("UPDATE ai_sessions SET model_config_id = NULL WHERE model_config_id = ?", (model_id,))
+
+
 @router.post("/models/{model_id}/test")
 def test_model(model_id: int, _: dict = Depends(require_admin)):
     with get_connection() as connection:
@@ -109,7 +166,7 @@ def test_model(model_id: int, _: dict = Depends(require_admin)):
         )
         return {"ok": True, "message": str(response.content)[:200]}
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"模型连接失败：{error}") from error
+        raise HTTPException(status_code=502, detail=_friendly_model_error(error)) from error
 
 
 @router.get("/sessions")
@@ -319,7 +376,7 @@ def chat(session_id: int, payload: ChatRequest, user: dict = Depends(get_current
             save_memory,
         )
     except Exception as error:
-        raise HTTPException(status_code=502, detail=f"Agent 执行失败：{error}") from error
+        raise HTTPException(status_code=502, detail=f"Agent 执行失败：{_friendly_model_error(error)}") from error
 
     with get_connection() as connection:
         cursor = connection.execute(
@@ -341,16 +398,24 @@ def chat(session_id: int, payload: ChatRequest, user: dict = Depends(get_current
 def export_cases(
     session_id: int,
     format: str = "xlsx",
+    message_id: int | None = None,
     user: dict = Depends(get_current_user),
 ):
     _get_session(session_id, user)
     with get_connection() as connection:
-        row = connection.execute(
-            """SELECT structured_json FROM ai_messages
-            WHERE session_id = ? AND role = 'assistant' AND structured_json IS NOT NULL
-            ORDER BY id DESC LIMIT 1""",
-            (session_id,),
-        ).fetchone()
+        if message_id is not None:
+            row = connection.execute(
+                """SELECT structured_json FROM ai_messages
+                WHERE id = ? AND session_id = ? AND role = 'assistant' AND structured_json IS NOT NULL""",
+                (message_id, session_id),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """SELECT structured_json FROM ai_messages
+                WHERE session_id = ? AND role = 'assistant' AND structured_json IS NOT NULL
+                ORDER BY id DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
     if row is None:
         raise HTTPException(status_code=409, detail="当前会话还没有可导出的结构化测试用例")
     payload = json.loads(row["structured_json"])

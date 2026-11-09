@@ -11,14 +11,14 @@ def export_excel(payload: dict) -> BytesIO:
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "测试用例"
-    headers = ["序号", "模块", "用例标题", "优先级", "类型", "前置条件", "测试步骤", "预期结果"]
+    headers = ["模块", "用例标题", "测试编号", "优先级", "类型", "前置条件", "测试步骤", "预期结果"]
     sheet.append(headers)
     for index, case in enumerate(payload.get("cases", []), 1):
         steps = case.get("steps", [])
         sheet.append([
-            index,
             case.get("module", ""),
             case.get("title", ""),
+            f"TC-{index:03d}",
             case.get("priority", ""),
             case.get("type", ""),
             case.get("preconditions", ""),
@@ -30,7 +30,7 @@ def export_excel(payload: dict) -> BytesIO:
         cell.fill = fill
         cell.font = Font(color="FFFFFF", bold=True)
         cell.alignment = Alignment(horizontal="center")
-    widths = [8, 16, 34, 10, 12, 28, 48, 38]
+    widths = [16, 34, 10, 10, 12, 28, 48, 38]
     for index, width in enumerate(widths, 1):
         sheet.column_dimensions[chr(64 + index)].width = width
     for row in sheet.iter_rows(min_row=2):
@@ -51,17 +51,25 @@ def _topic(title: str, children: list | None = None) -> dict:
 
 
 def export_xmind(payload: dict) -> BytesIO:
+    """XMind 导出为单链式结构：每条用例节点只有一个子节点，明细一层一层向下顺延。"""
     modules: dict[str, list] = {}
-    for case in payload.get("cases", []):
-        steps = [_topic(f"步骤 {i}：{step}") for i, step in enumerate(case.get("steps", []), 1)]
-        details = [
-            _topic(f"优先级：{case.get('priority', '')}"),
-            _topic(f"类型：{case.get('type', '')}"),
-            _topic(f"前置条件：{case.get('preconditions', '')}"),
-            _topic("测试步骤", steps),
-            _topic(f"预期结果：{case.get('expected_result', '')}"),
+    for number, case in enumerate(payload.get("cases", []), 1):
+        sequence = [
+            f"优先级：{case.get('priority') or '-'}",
+            f"类型：{case.get('type') or '-'}",
+            f"前置条件：{case.get('preconditions') or '-'}",
         ]
-        modules.setdefault(case.get("module") or "未分类", []).append(_topic(case.get("title", "测试用例"), details))
+        steps = case.get("steps") or []
+        if steps:
+            sequence.append("测试步骤：" + "；".join(f"{i}. {step}" for i, step in enumerate(steps, 1)))
+        sequence.append(f"预期结果：{case.get('expected_result') or '-'}")
+        # 从最后一个节点向前折叠，形成每节点单子节点的链
+        node = None
+        for item in reversed(sequence):
+            node = _topic(item, [node] if node else None)
+        modules.setdefault(case.get("module") or "未分类", []).append(
+            _topic(f"{case.get('title') or '测试用例'}（TC-{number:03d}）", [node])
+        )
     root_children = [_topic(module, cases) for module, cases in modules.items()]
     sheet_id = str(uuid4())
     content = [{

@@ -21,8 +21,10 @@ const error = ref('')
 const showLinkInput = ref(false)
 const linkUrl = ref('')
 const linkBusy = ref(false)
+const caseViewer = ref(null)
 const showModelDialog = ref(false)
 const modelSaving = ref(false)
+const editingId = ref(null)
 const connectionMessage = ref('')
 const messageList = ref(null)
 const modelForm = ref({
@@ -57,6 +59,7 @@ async function request(path, options = {}) {
     try { detail = (await response.json()).detail || detail } catch {}
     throw new Error(detail)
   }
+  if (response.status === 204) return null
   return response.json()
 }
 
@@ -182,11 +185,12 @@ function formatSize(bytes) {
   return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)}KB` : `${(bytes / 1024 / 1024).toFixed(1)}MB`
 }
 
-async function exportCases(format) {
+async function exportCases(format, messageId = null) {
   if (!currentSession.value) return
   error.value = ''
   try {
-    const response = await fetch(`${props.api}/api/ai/sessions/${currentSession.value.id}/export?format=${format}`, { headers: { Authorization: `Bearer ${props.token}` } })
+    const suffix = messageId ? `&message_id=${messageId}` : ''
+    const response = await fetch(`${props.api}/api/ai/sessions/${currentSession.value.id}/export?format=${format}${suffix}`, { headers: { Authorization: `Bearer ${props.token}` } })
     if (!response.ok) {
       const data = await response.json()
       throw new Error(data.detail || '导出失败')
@@ -211,19 +215,65 @@ function applyProviderPreset() {
   }
 }
 
+function resetModelForm() {
+  editingId.value = null
+  modelForm.value = { name: 'OpenAI', provider: 'openai', base_url: 'https://api.openai.com/v1', model_name: '', api_key: '', api_style: 'responses' }
+}
+
+function startEdit(model) {
+  editingId.value = model.id
+  modelForm.value = {
+    name: model.name, provider: model.provider || 'openai_compatible',
+    base_url: model.base_url || '', model_name: model.model_name || '',
+    api_key: '', api_style: model.api_style || 'chat_completions',
+  }
+  connectionMessage.value = ''
+  showModelDialog.value = true
+}
+
 async function saveModel() {
   modelSaving.value = true
   error.value = ''
   try {
-    const model = await request('/api/ai/models', { method: 'POST', body: JSON.stringify(modelForm.value) })
-    models.value.unshift(model)
-    selectedModelId.value = model.id
-    showModelDialog.value = false
-    modelForm.value = { name: 'OpenAI', provider: 'openai', base_url: 'https://api.openai.com/v1', model_name: '', api_key: '', api_style: 'responses' }
+    if (editingId.value) {
+      const payload = { ...modelForm.value }
+      if (!payload.api_key) delete payload.api_key
+      const updated = await request(`/api/ai/models/${editingId.value}`, {
+        method: 'PATCH', body: JSON.stringify(payload),
+      })
+      const index = models.value.findIndex((item) => item.id === editingId.value)
+      if (index >= 0) models.value.splice(index, 1, updated)
+      await refreshSessions()
+      const refreshed = sessions.value.find((item) => item.id === currentSession.value?.id)
+      if (refreshed) currentSession.value = refreshed
+      showModelDialog.value = false
+      resetModelForm()
+    } else {
+      const model = await request('/api/ai/models', { method: 'POST', body: JSON.stringify(modelForm.value) })
+      models.value.unshift(model)
+      selectedModelId.value = model.id
+      showModelDialog.value = false
+      resetModelForm()
+    }
   } catch (requestError) {
     error.value = requestError.message
   } finally {
     modelSaving.value = false
+  }
+}
+
+async function deleteModel(model) {
+  if (!window.confirm(`删除模型配置「${model.name}」？正在使用它的会话需要重新选择模型。`)) return
+  error.value = ''
+  try {
+    await request(`/api/ai/models/${model.id}`, { method: 'DELETE' })
+    models.value = models.value.filter((item) => item.id !== model.id)
+    if (editingId.value === model.id) { editingId.value = null; showModelDialog.value = false }
+    await refreshSessions()
+    const refreshed = sessions.value.find((item) => item.id === currentSession.value?.id)
+    if (refreshed) currentSession.value = refreshed
+  } catch (requestError) {
+    error.value = requestError.message
   }
 }
 
@@ -275,7 +325,7 @@ onMounted(loadInitial)
           <article v-for="message in messages" :key="message.id" class="chat-message" :class="message.role">
             <div class="avatar">{{ message.role === 'user' ? '你' : 'AI' }}</div>
             <div class="message-body"><p>{{ displayContent(message) }}</p>
-              <div v-if="message.structured" class="case-result"><div class="case-summary"><strong>{{ message.structured.suite_name }}</strong><span>{{ message.structured.cases.length }} 条用例</span></div><p>{{ message.structured.summary }}</p><div class="case-preview"><span v-for="item in message.structured.cases.slice(0, 6)" :key="item.title"><b>{{ item.priority }}</b>{{ item.title }}</span></div></div>
+              <div v-if="message.structured" class="case-result" title="点击查看全部用例" @click="caseViewer = message"><div class="case-summary"><strong>{{ message.structured.suite_name }}</strong><span>{{ message.structured.cases.length }} 条用例</span></div><p>{{ message.structured.summary }}</p><div class="case-preview"><span v-for="item in message.structured.cases.slice(0, 6)" :key="item.title"><b>{{ item.priority }}</b>{{ item.title }}</span></div><small class="case-open-hint">点击查看全部 {{ message.structured.cases.length }} 条用例并导出 →</small></div>
             </div>
           </article>
           <article v-if="busy" class="chat-message assistant"><div class="avatar">AI</div><div class="thinking"><i></i><i></i><i></i><span>Agent 正在分析需求并规划用例…</span></div></article>
@@ -303,18 +353,54 @@ onMounted(loadInitial)
   <div v-if="showModelDialog" class="modal-backdrop" @click.self="showModelDialog = false">
     <section class="model-modal">
       <div class="modal-title"><div><h3>大模型配置</h3><p>API Key 加密保存，不会返回到浏览器</p></div><button @click="showModelDialog = false">×</button></div>
-      <div v-if="models.length" class="configured-models"><div v-for="model in models" :key="model.id"><span><strong>{{ model.name }}</strong><small>{{ model.model_name }} · {{ model.base_url }}</small></span><button class="secondary" @click="testModel(model)">测试连接</button></div></div>
+      <div v-if="models.length" class="configured-models"><div v-for="model in models" :key="model.id"><span><strong>{{ model.name }}</strong><small>{{ model.model_name }} · {{ model.base_url }}</small></span><span class="model-row-actions"><button class="secondary" @click="testModel(model)">测试连接</button><button class="secondary" @click="startEdit(model)">编辑</button><button class="secondary danger" @click="deleteModel(model)">删除</button></span></div></div>
       <p v-if="connectionMessage" class="connection-message">{{ connectionMessage }}</p>
-      <div class="divider"><span>添加配置</span></div>
+      <div class="divider"><span>{{ editingId ? '修改配置' : '添加配置' }}</span></div>
       <form class="model-form" @submit.prevent="saveModel">
         <div class="form-group"><label>服务类型</label><select v-model="modelForm.provider" @change="applyProviderPreset"><option value="openai">OpenAI / Codex</option><option value="step_dimension">跃迁维度（兼容接口）</option><option value="openai_compatible">其他 OpenAI-compatible</option></select></div>
         <div class="form-group"><label>配置名称</label><input v-model="modelForm.name" required placeholder="例如：Codex 生产模型"></div>
         <div class="form-group full"><label>Base URL</label><input v-model="modelForm.base_url" required placeholder="https://api.example.com/v1"></div>
         <div class="form-group"><label>模型 ID</label><input v-model="modelForm.model_name" required placeholder="填写账号实际可用的模型 ID"></div>
         <div class="form-group"><label>API 模式</label><select v-model="modelForm.api_style"><option value="responses">Responses API</option><option value="chat_completions">Chat Completions</option></select></div>
-        <div class="form-group full"><label>API Key</label><input v-model="modelForm.api_key" required type="password" autocomplete="new-password" placeholder="sk-..."></div>
-        <button class="primary full" :disabled="modelSaving">{{ modelSaving ? '保存中…' : '保存模型配置' }}</button>
+        <div class="form-group full"><label>API Key</label><input v-model="modelForm.api_key" :required="!editingId" type="password" autocomplete="new-password" :placeholder="editingId ? '留空则保持原有 Key 不变' : 'sk-...'"></div>
+        <div class="full model-form-actions">
+          <button v-if="editingId" type="button" class="secondary" @click="resetModelForm">取消修改</button>
+          <button class="primary" :disabled="modelSaving">{{ modelSaving ? '保存中…' : (editingId ? '保存修改' : '保存模型配置') }}</button>
+        </div>
       </form>
+    </section>
+  </div>
+
+  <div v-if="caseViewer" class="modal-backdrop" @click.self="caseViewer = null">
+    <section class="case-modal">
+      <div class="modal-title">
+        <div><h3>{{ caseViewer.structured.suite_name }}</h3><p>{{ caseViewer.structured.summary }}</p></div>
+        <button @click="caseViewer = null">×</button>
+      </div>
+      <div class="case-toolbar">
+        <span class="case-count">共 {{ caseViewer.structured.cases.length }} 条用例</span>
+        <div class="case-toolbar-actions">
+          <button class="secondary" @click="exportCases('xlsx', caseViewer.id)">导出 Excel</button>
+          <button class="secondary" @click="exportCases('xmind', caseViewer.id)">导出 XMind</button>
+        </div>
+      </div>
+      <div class="case-table-wrap">
+        <table class="case-table">
+          <thead><tr><th>优先级</th><th>模块</th><th>用例标题</th><th>测试编号</th><th>类型</th><th>前置条件</th><th>操作步骤</th><th>预期结果</th></tr></thead>
+          <tbody>
+            <tr v-for="(item, index) in caseViewer.structured.cases" :key="index">
+              <td><span class="prio" :class="`p-${(item.priority || 'p3').toLowerCase()}`">{{ item.priority || '-' }}</span></td>
+              <td>{{ item.module || '-' }}</td>
+              <td class="case-title">{{ item.title }}</td>
+              <td><span class="case-no">TC-{{ String(index + 1).padStart(3, '0') }}</span></td>
+              <td>{{ item.type || '-' }}</td>
+              <td>{{ item.preconditions || '-' }}</td>
+              <td><ol v-if="item.steps && item.steps.length"><li v-for="(step, stepIndex) in item.steps" :key="stepIndex">{{ step }}</li></ol><span v-else>-</span></td>
+              <td>{{ item.expected_result || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
 </template>
